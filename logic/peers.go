@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gravitl/netmaker/database"
@@ -218,6 +219,11 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 		return models.HostPeerUpdate{}, errors.New("host is nil")
 	}
 
+	// probePeerKeys marks seamless-failover probe peers (real endpoint +
+	// keepalive but intentionally no allowed IPs) so the post-peer pass does not
+	// force-remove them as "no allowed IPs were calculated".
+	probePeerKeys := map[string]bool{}
+
 	// track which nodes are deleted
 	// after peer calculation, if peer not in list, add delete config of peer
 	hostPeerUpdate = models.HostPeerUpdate{
@@ -348,6 +354,7 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 			}
 		}
 		currentPeers := GetNetworkNodesMemory(allNodes, node.Network)
+		autoRelayNodeID := GetServerSettings().AutoRelayNodeID
 		for _, peer := range currentPeers {
 			if peer.ID.String() == node.ID.String() {
 				// skip yourself
@@ -434,6 +441,32 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 				(peer.IsRelayed && peer.RelayedBy != node.ID.String()) || isAutoRelayPeer {
 				// if node is relayed and peer is not the relay, set remove to true
 				if _, ok := peerIndexMap[peerHost.PublicKey.String()]; ok {
+					continue
+				}
+				// Seamless failover: for an auto-relayed peer that has a real
+				// public endpoint, keep a warm background ("probe") session — real
+				// endpoint + persistent keepalive but NO allowed IPs — so a direct
+				// hole-punched path can be established and proven while traffic
+				// still flows through the relay. The relay keeps carrying the
+				// routing (allowed IPs); once the probe proves a direct path, the
+				// auto-relay reconciler un-relays the node and the allowed IPs move
+				// onto this already-established session with no handshake gap. If
+				// the direct path later dies, the node is re-relayed onto the
+				// (always-warm) relay session, again with no gap.
+				autoRelayed := autoRelayNodeID != "" &&
+					(node.RelayedBy == autoRelayNodeID || peer.RelayedBy == autoRelayNodeID)
+				if autoRelayed && peerHost.EndpointIP != nil && !peer.IsStatic && peer.InternetGwID == "" {
+					probeKeepalive := time.Duration(20) * time.Second
+					probeConfig := wgtypes.PeerConfig{
+						PublicKey:                   peerHost.PublicKey.Key,
+						Endpoint:                    &net.UDPAddr{IP: peerHost.EndpointIP, Port: GetPeerListenPort(peerHost)},
+						PersistentKeepaliveInterval: &probeKeepalive,
+						ReplaceAllowedIPs:           true,
+						AllowedIPs:                  []net.IPNet{},
+					}
+					hostPeerUpdate.Peers = append(hostPeerUpdate.Peers, probeConfig)
+					peerIndexMap[peerHost.PublicKey.String()] = len(hostPeerUpdate.Peers) - 1
+					probePeerKeys[peerHost.PublicKey.String()] = true
 					continue
 				}
 				peerConfig.Remove = true
@@ -692,7 +725,7 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 	// indicate removal if no allowed IPs were calculated
 	for i := range hostPeerUpdate.Peers {
 		peer := hostPeerUpdate.Peers[i]
-		if len(peer.AllowedIPs) == 0 {
+		if len(peer.AllowedIPs) == 0 && !probePeerKeys[peer.PublicKey.String()] {
 			peer.Remove = true
 		}
 		hostPeerUpdate.Peers[i] = peer
