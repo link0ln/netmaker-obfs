@@ -335,6 +335,12 @@ type ServerConfig struct {
 	DefaultDomain               string `yaml:"default_domain"`
 	PeerConnectionCheckInterval string `yaml:"peer_connection_check_interval"`
 	OldAClsSupport              bool   `json:"-"`
+	// AmneziaWG - global AmneziaWG DPI-obfuscation parameters delivered to the host.
+	AmneziaWG AmneziaWGConfig `yaml:"amneziawg" json:"amneziawg"`
+	// AutoRelayPubKey - WireGuard public key of the designated auto-relay node, if
+	// any. Clients exclude it from their direct-connectivity check (it is public and
+	// always reachable, so a handshake with it must not mask isolation from peers).
+	AutoRelayPubKey string `yaml:"auto_relay_pubkey" json:"auto_relay_pubkey"`
 }
 
 // ServerIDs - struct to hold server ids.

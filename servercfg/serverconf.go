@@ -774,9 +774,27 @@ func IsStunEnabled() bool {
 func GetStunServers() string {
 	stunservers := os.Getenv("STUN_SERVERS")
 	if stunservers == "" {
-		stunservers = "stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302"
+		// Default to the self-hosted STUN server (no third-party dependency).
+		// Falls back to Google's STUN only if the server host is unknown.
+		if host := GetServerHostIP(); host != "" {
+			stunservers = fmt.Sprintf("%s:%d", host, GetStunPort())
+		} else {
+			stunservers = "stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302"
+		}
 	}
 	return stunservers
+}
+
+// GetStunPort returns the UDP port the self-hosted STUN server listens on
+// (env STUN_PORT, default 3478).
+func GetStunPort() int {
+	port := 3478
+	if os.Getenv("STUN_PORT") != "" {
+		if p, err := strconv.Atoi(os.Getenv("STUN_PORT")); err == nil {
+			port = p
+		}
+	}
+	return port
 }
 
 // GetEnvironment returns the environment the server is running in (e.g. dev, staging, prod...)

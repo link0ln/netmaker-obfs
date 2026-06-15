@@ -186,6 +186,12 @@ func startControllers(wg *sync.WaitGroup, ctx context.Context) {
 
 	wg.Add(1)
 	go logic.StartHookManager(ctx, wg)
+	// Run the self-hosted STUN server so netclients can discover their public
+	// WireGuard endpoint for NAT hole-punching without a third-party STUN service.
+	go logic.StartStunServer(ctx)
+	// Auto-relay fallback: route symmetric-NAT hosts (which cannot hole-punch)
+	// through the designated relay node automatically.
+	go mq.StartAutoRelayReconciler(ctx)
 	// Only run network cleanup hooks on master pod
 	if servercfg.IsMasterPod() {
 		logic.InitNetworkHooks()

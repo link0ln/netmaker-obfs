@@ -161,6 +161,53 @@ func ValidateNewSettings(req models.ServerSettings) error {
 		return ErrInvalidIPDetectionInterval
 	}
 
+	if err := ValidateAmneziaWG(req.AmneziaWG); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ValidateAmneziaWG - validates the global AmneziaWG obfuscation parameters.
+// When disabled, nothing is checked. When enabled: Jc/Jmin/Jmax must be positive
+// with Jmin <= Jmax; S1-S4 non-negative; H1-H4 must each be a valid uint32 (or
+// "start-end" range) and be distinct from one another (overlapping magic headers
+// break the protocol framing).
+func ValidateAmneziaWG(a models.AmneziaWGConfig) error {
+	if !a.Enabled {
+		return nil
+	}
+	if a.Jc <= 0 || a.Jmin <= 0 || a.Jmax <= 0 {
+		return errors.New("amneziawg: jc, jmin and jmax must be positive when enabled")
+	}
+	if a.Jmin > a.Jmax {
+		return errors.New("amneziawg: jmin must be <= jmax")
+	}
+	if a.S1 < 0 || a.S2 < 0 || a.S3 < 0 || a.S4 < 0 {
+		return errors.New("amneziawg: s1-s4 must be non-negative")
+	}
+	headers := map[string]string{"h1": a.H1, "h2": a.H2, "h3": a.H3, "h4": a.H4}
+	seen := map[uint64]string{}
+	for name, h := range headers {
+		if h == "" {
+			return fmt.Errorf("amneziawg: %s must be set when enabled", name)
+		}
+		start := h
+		if i := strings.Index(h, "-"); i >= 0 {
+			start = h[:i]
+			if _, err := strconv.ParseUint(h[i+1:], 10, 32); err != nil {
+				return fmt.Errorf("amneziawg: %s range end is not a valid uint32: %w", name, err)
+			}
+		}
+		v, err := strconv.ParseUint(start, 10, 32)
+		if err != nil {
+			return fmt.Errorf("amneziawg: %s is not a valid uint32: %w", name, err)
+		}
+		if other, dup := seen[v]; dup {
+			return fmt.Errorf("amneziawg: %s and %s must not overlap", name, other)
+		}
+		seen[v] = name
+	}
 	return nil
 }
 
@@ -194,9 +241,41 @@ func GetServerSettingsFromEnv() (s models.ServerSettings) {
 		DefaultDomain:              servercfg.GetDefaultDomain(),
 		Stun:                       servercfg.IsStunEnabled(),
 		StunServers:                servercfg.GetStunServers(),
+		AmneziaWG:                  getAmneziaWGFromEnv(),
+		AutoRelayEnabled:           os.Getenv("AUTO_RELAY_ENABLED") == "true",
+		AutoRelayNodeID:            os.Getenv("AUTO_RELAY_NODE_ID"),
 	}
 
 	return
+}
+
+// getAmneziaWGFromEnv - builds the global AmneziaWG obfuscation config from env
+// vars (AWG_ENABLED, AWG_JC, AWG_JMIN, AWG_JMAX, AWG_S1..S4, AWG_H1..H4). Used to
+// seed the server settings on first boot; can later be edited via the settings API.
+func getAmneziaWGFromEnv() models.AmneziaWGConfig {
+	atoi := func(k string) int {
+		v, _ := strconv.Atoi(os.Getenv(k))
+		return v
+	}
+	return models.AmneziaWGConfig{
+		Enabled: os.Getenv("AWG_ENABLED") == "true",
+		Jc:      atoi("AWG_JC"),
+		Jmin:    atoi("AWG_JMIN"),
+		Jmax:    atoi("AWG_JMAX"),
+		S1:      atoi("AWG_S1"),
+		S2:      atoi("AWG_S2"),
+		S3:      atoi("AWG_S3"),
+		S4:      atoi("AWG_S4"),
+		H1:      os.Getenv("AWG_H1"),
+		H2:      os.Getenv("AWG_H2"),
+		H3:      os.Getenv("AWG_H3"),
+		H4:      os.Getenv("AWG_H4"),
+		I1:      os.Getenv("AWG_I1"),
+		I2:      os.Getenv("AWG_I2"),
+		I3:      os.Getenv("AWG_I3"),
+		I4:      os.Getenv("AWG_I4"),
+		I5:      os.Getenv("AWG_I5"),
+	}
 }
 
 // GetServerConfig - gets the server config into memory from file or env
@@ -298,6 +377,12 @@ func GetServerInfo() models.ServerConfig {
 	cfg.DefaultDomain = serverSettings.DefaultDomain
 	cfg.EndpointDetection = serverSettings.EndpointDetection
 	cfg.PeerConnectionCheckInterval = serverSettings.PeerConnectionCheckInterval
+	cfg.AmneziaWG = serverSettings.AmneziaWG
+	if serverSettings.AutoRelayEnabled && serverSettings.AutoRelayNodeID != "" {
+		if h := GetHostByNodeID(serverSettings.AutoRelayNodeID); h != nil {
+			cfg.AutoRelayPubKey = h.PublicKey.String()
+		}
+	}
 	key, _ := RetrievePublicTrafficKey()
 	cfg.TrafficKey = key
 	return cfg

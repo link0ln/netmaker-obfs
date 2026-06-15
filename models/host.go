@@ -29,9 +29,13 @@ var OS_Types = struct {
 var NAT_Types = struct {
 	Public    string
 	BehindNAT string
+	Symmetric string
 }{
 	Public:    "public",
 	BehindNAT: "behind_nat",
+	// Symmetric NAT maps the same internal socket to a different external port
+	// per destination, so UDP hole-punching cannot work; such hosts must be relayed.
+	Symmetric: "symmetric",
 }
 
 // WIREGUARD_INTERFACE name of wireguard interface
