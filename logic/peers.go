@@ -457,9 +457,21 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 					(node.RelayedBy == autoRelayNodeID || peer.RelayedBy == autoRelayNodeID)
 				if autoRelayed && peerHost.EndpointIP != nil && !peer.IsStatic && peer.InternetGwID == "" {
 					probeKeepalive := time.Duration(20) * time.Second
+					// Probe candidate port: use the peer's actual WireGuard listen
+					// port, NOT WgPublicListenPort. WgPublicListenPort is the
+					// external mapping of a SEPARATE ephemeral STUN socket measured
+					// once at startup, and goes stale after a network change (it
+					// can't be re-measured at runtime while WG owns the port). For a
+					// (port-preserving) cone NAT the peer's external WG port equals
+					// its listen port, so this is the correct hole-punch target; for
+					// symmetric NAT no single candidate works anyway.
+					probePort := peerHost.ListenPort
+					if probePort == 0 {
+						probePort = GetPeerListenPort(peerHost)
+					}
 					probeConfig := wgtypes.PeerConfig{
 						PublicKey:                   peerHost.PublicKey.Key,
-						Endpoint:                    &net.UDPAddr{IP: peerHost.EndpointIP, Port: GetPeerListenPort(peerHost)},
+						Endpoint:                    &net.UDPAddr{IP: peerHost.EndpointIP, Port: probePort},
 						PersistentKeepaliveInterval: &probeKeepalive,
 						ReplaceAllowedIPs:           true,
 						AllowedIPs:                  []net.IPNet{},
@@ -526,6 +538,19 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 			}
 
 			if uselocal {
+				peerConfig.Endpoint.Port = peerHost.ListenPort
+			}
+
+			// In an auto-relay network, target a NAT'd peer's actual WireGuard
+			// listen port instead of its STUN-detected public port. The latter is
+			// a separate ephemeral socket's mapping measured once at startup and
+			// goes stale after a network change (it can't be re-measured while WG
+			// owns the port); the listen port is the correct hole-punch target for
+			// a port-preserving cone NAT. This also keeps the direct endpoint
+			// consistent with the background probe, so when the node is un-relayed
+			// the routing moves onto the already-warm probe session with no gap.
+			if autoRelayNodeID != "" && peerEndpoint != nil && !peer.IsStatic &&
+				!peerHost.IsStaticPort && peerHost.ListenPort != 0 {
 				peerConfig.Endpoint.Port = peerHost.ListenPort
 			}
 
