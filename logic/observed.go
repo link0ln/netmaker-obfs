@@ -50,6 +50,12 @@ func SetObservedEndpoints(reporterHostID string, eps map[string]string) {
 		if ep == "" {
 			continue
 		}
+		// Never cache a private/non-routable observed endpoint — it is not a valid
+		// cross-NAT hole-punch target and would poison the candidate handed to peers.
+		if ip, _, ok := ParseObservedEndpoint(ep); !ok || ip.IsPrivate() ||
+			ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
 		m[pk] = observedEntry{endpoint: ep, seen: now}
 	}
 }
