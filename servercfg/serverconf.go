@@ -774,12 +774,11 @@ func IsStunEnabled() bool {
 func GetStunServers() string {
 	stunservers := os.Getenv("STUN_SERVERS")
 	if stunservers == "" {
-		// Default to the self-hosted STUN server (no third-party dependency).
-		// Falls back to Google's STUN only if the server host is unknown.
+		// Self-hosted STUN only — NO third-party dependency (no Google fallback).
+		// If the server host is somehow unknown, STUN stays unset (disabled) rather
+		// than reaching out to an external service.
 		if host := GetServerHostIP(); host != "" {
 			stunservers = fmt.Sprintf("%s:%d", host, GetStunPort())
-		} else {
-			stunservers = "stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302"
 		}
 	}
 	return stunservers
