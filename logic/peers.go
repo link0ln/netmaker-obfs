@@ -456,22 +456,29 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 				autoRelayed := autoRelayNodeID != "" &&
 					(node.RelayedBy == autoRelayNodeID || peer.RelayedBy == autoRelayNodeID)
 				if autoRelayed && peerHost.EndpointIP != nil && !peer.IsStatic && peer.InternetGwID == "" {
-					probeKeepalive := time.Duration(20) * time.Second
-					// Probe candidate port: use the peer's actual WireGuard listen
-					// port, NOT WgPublicListenPort. WgPublicListenPort is the
-					// external mapping of a SEPARATE ephemeral STUN socket measured
-					// once at startup, and goes stale after a network change (it
-					// can't be re-measured at runtime while WG owns the port). For a
-					// (port-preserving) cone NAT the peer's external WG port equals
-					// its listen port, so this is the correct hole-punch target; for
-					// symmetric NAT no single candidate works anyway.
+					// Aggressive 5s keepalive (vs the default 20s): both ends of an
+					// auto-relayed pair run this probe, so a short interval opens the
+					// restricted-cone NAT filters on BOTH sides quickly and keeps them
+					// open, which is what actually lets the hole-punch land (tinc-style
+					// continuous bidirectional probing).
+					probeKeepalive := time.Duration(5) * time.Second
+					// Probe candidate endpoint. Prefer the RELAY-observed source
+					// address (the peer's real external WG ip:port as seen in the data
+					// path) — it is correct even when the peer's own STUN self-report
+					// is wrong/stale (a separate ephemeral socket's mapping). Fall back
+					// to the peer's listen port (correct for a port-preserving cone NAT;
+					// for symmetric NAT no single candidate works anyway).
+					probeIP := peerHost.EndpointIP
 					probePort := peerHost.ListenPort
 					if probePort == 0 {
 						probePort = GetPeerListenPort(peerHost)
 					}
+					if oip, oport, ok := ParseObservedEndpoint(GetObservedEndpoint(peerHost.PublicKey.String(), "")); ok {
+						probeIP, probePort = oip, oport
+					}
 					probeConfig := wgtypes.PeerConfig{
 						PublicKey:                   peerHost.PublicKey.Key,
-						Endpoint:                    &net.UDPAddr{IP: peerHost.EndpointIP, Port: probePort},
+						Endpoint:                    &net.UDPAddr{IP: probeIP, Port: probePort},
 						PersistentKeepaliveInterval: &probeKeepalive,
 						ReplaceAllowedIPs:           true,
 						AllowedIPs:                  []net.IPNet{},
@@ -552,6 +559,13 @@ func GetPeerUpdateForHost(network string, host *schema.Host, allNodes []models.N
 			if autoRelayNodeID != "" && peerEndpoint != nil && !peer.IsStatic &&
 				!peerHost.IsStaticPort && peerHost.ListenPort != 0 {
 				peerConfig.Endpoint.Port = peerHost.ListenPort
+				// Prefer the relay-observed real external endpoint (kept consistent
+				// with the probe above, so un-relaying reuses the already-warm
+				// session with no handshake gap).
+				if oip, oport, ok := ParseObservedEndpoint(GetObservedEndpoint(peerHost.PublicKey.String(), "")); ok {
+					peerConfig.Endpoint.IP = oip
+					peerConfig.Endpoint.Port = oport
+				}
 			}
 
 			if peer.Action != schema.NODE_DELETE &&

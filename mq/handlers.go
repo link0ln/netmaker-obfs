@@ -107,6 +107,12 @@ func UpdateHost(client mqtt.Client, msg mqtt.Message) {
 		return
 	}
 	slog.Info("recieved host update", "name", hostUpdate.Host.Name, "id", hostUpdate.Host.ID)
+	// Cache any relay-observed peer endpoints carried on this update. These are the
+	// real external WG source addresses this host sees for its peers and are used
+	// as hole-punch candidates when building OTHER peers' updates.
+	if len(hostUpdate.ObservedEndpoints) > 0 {
+		logic.SetObservedEndpoints(currentHost.ID.String(), hostUpdate.ObservedEndpoints)
+	}
 	var sendPeerUpdate bool
 	var replacePeers bool
 	switch hostUpdate.Action {

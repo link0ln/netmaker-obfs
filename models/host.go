@@ -162,6 +162,13 @@ type HostUpdate struct {
 	Signal       Signal
 	EgressDomain EgressDomain
 	NewMetrics   Metrics
+	// ObservedEndpoints carries the real external WireGuard endpoints this host
+	// currently observes for its peers (peer-pubkey -> "ip:port"), as learned
+	// from the WG device. A relay sees every peer's true source address, which
+	// is the correct hole-punch target even when the peer's own STUN self-report
+	// is wrong/stale (a separate ephemeral socket's mapping). The server caches
+	// these and hands them to other peers as the hole-punch candidate.
+	ObservedEndpoints map[string]string `json:"observed_endpoints,omitempty"`
 }
 
 // HostTurnRegister - struct for host turn registration
