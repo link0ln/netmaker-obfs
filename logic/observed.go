@@ -33,10 +33,12 @@ var (
 const observedTTL = 3 * time.Minute
 
 // SetObservedEndpoints records the endpoints a reporting host observes for its
-// peers (peer-pubkey -> "ip:port").
-func SetObservedEndpoints(reporterHostID string, eps map[string]string) {
+// peers (peer-pubkey -> "ip:port"). It returns true when a NEW endpoint appeared
+// or an existing one CHANGED value (not merely a TTL refresh) — the caller uses
+// that to trigger a peer update so the new hole-punch candidate reaches peers.
+func SetObservedEndpoints(reporterHostID string, eps map[string]string) (changed bool) {
 	if len(eps) == 0 {
-		return
+		return false
 	}
 	now := time.Now()
 	observedMu.Lock()
@@ -56,8 +58,12 @@ func SetObservedEndpoints(reporterHostID string, eps map[string]string) {
 			ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 			continue
 		}
+		if prev, ok := m[pk]; !ok || prev.endpoint != ep {
+			changed = true
+		}
 		m[pk] = observedEntry{endpoint: ep, seen: now}
 	}
+	return changed
 }
 
 // GetObservedEndpoint returns the freshest non-stale observed endpoint for
